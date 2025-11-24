@@ -3,12 +3,6 @@ session_start();
 include '../../mysqli_connect.php';
 include '../../templates/functions.php';
 
-// Enable error reporting for debugging
-error_reporting(E_ALL);
-ini_set('display_errors', 0);
-ini_set('log_errors', 1);
-
-// Security checks
 if (!isset($_SERVER['HTTP_X_REQUESTED_WITH']) || strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) !== 'xmlhttprequest') {
     http_response_code(403);
     die(json_encode(['status' => 'error', 'message' => 'Invalid request']));
@@ -19,21 +13,21 @@ if (!isset($_SESSION['id'])){
 	die(json_encode(['status' => 'error', 'message' => 'Not authenticated']));
 }
 
-// Check admin role
 if (!checkRole('lighthouse_maritime')){
 	http_response_code(403);
 	die(json_encode(['status' => 'error', 'message' => 'Access denied - Admin only']));
 }
 
-// Query to get all priorities (admins see all)
 $query = "SELECT * FROM lh_priorities ORDER BY priority_order ASC, priority_name ASC";
 $result = mysqli_query($dbc, $query);
 
 if (!$result) {
+	error_log('Failed to read priorities: ' . mysqli_error($dbc));
+    
     http_response_code(500);
     echo json_encode([
         'status' => 'error',
-        'message' => 'Database query failed: ' . mysqli_error($dbc)
+        'message' => 'Database query failed. Please try again or contact support.'
     ]);
     exit();
 }
