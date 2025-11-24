@@ -3,7 +3,6 @@ session_start();
 date_default_timezone_set('America/New_York');
 include '../../mysqli_connect.php';
 include '../../templates/functions.php';
-
 header('Content-Type: application/json');
 
 if (!isset($_SESSION['switch_id'])) {
@@ -29,7 +28,6 @@ if ($signal_id <= 0) {
     exit();
 }
 
-// Verify signal exists and user has permission
 $check_query = "SELECT sent_by FROM lh_signals WHERE signal_id = ? AND is_deleted = 0";
 $check_stmt = mysqli_prepare($dbc, $check_query);
 mysqli_stmt_bind_param($check_stmt, 'i', $signal_id);
@@ -40,31 +38,22 @@ if (mysqli_num_rows($check_result) == 0) {
     echo json_encode(['success' => false, 'message' => 'Signal not found']);
     exit();
 }
-
 $signal = mysqli_fetch_assoc($check_result);
 $is_admin = checkRole('lighthouse_keeper');
 
-// Both users and admins can create updates
-// Check permissions - users can update their own signals, admins can update any
 if (!$is_admin && $signal['sent_by'] != $user_id) {
     echo json_encode(['success' => false, 'message' => 'Permission denied']);
     exit();
 }
 
-// Only admins can create internal updates
 if ($is_internal == 1 && !$is_admin) {
     $is_internal = 0;
 }
-
 try {
-    // Start transaction
-    mysqli_begin_transaction($dbc);
+ 	mysqli_begin_transaction($dbc);
     
-    // Get current datetime for consistent timestamps
-    $current_datetime = date('Y-m-d H:i:s');
-    
-    // Insert the update with explicit created_date
-    $insert_query = "INSERT INTO lh_signal_updates (signal_id, user_id, update_type, old_value, new_value, message, is_internal, created_date) 
+	$current_datetime = date('Y-m-d H:i:s');
+ 	$insert_query = "INSERT INTO lh_signal_updates (signal_id, user_id, update_type, old_value, new_value, message, is_internal, created_date) 
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
     
     $insert_stmt = mysqli_prepare($dbc, $insert_query);
@@ -74,8 +63,7 @@ try {
         throw new Exception('Failed to add update');
     }
     
-    // Log activity
-    $activity_text = $is_internal ? 'Added private update' : 'Added signal update';
+  	$activity_text = $is_internal ? 'Added private update' : 'Added signal update';
     $activity_query = "INSERT INTO lh_signal_activity (signal_id, user_id, activity_type, created_date) 
                        VALUES (?, ?, ?, ?)";
     $activity_stmt = mysqli_prepare($dbc, $activity_query);
@@ -85,8 +73,7 @@ try {
         throw new Exception('Failed to log activity');
     }
     
-    // Update signal updated_date
-    $update_query = "UPDATE lh_signals SET updated_date = ? WHERE signal_id = ?";
+ 	$update_query = "UPDATE lh_signals SET updated_date = ? WHERE signal_id = ?";
     $update_stmt = mysqli_prepare($dbc, $update_query);
     mysqli_stmt_bind_param($update_stmt, 'si', $current_datetime, $signal_id);
     
@@ -94,18 +81,17 @@ try {
         throw new Exception('Failed to update signal timestamp');
     }
     
-    // Commit transaction
-    mysqli_commit($dbc);
+  	mysqli_commit($dbc);
     
     echo json_encode(['success' => true, 'message' => 'Update added successfully']);
     
 } catch (Exception $e) {
     mysqli_rollback($dbc);
+    error_log('Add signal update error (Signal ID: ' . $signal_id . ', User ID: ' . $user_id . '): ' . $e->getMessage());
     echo json_encode([
         'success' => false,
-        'message' => 'Failed to add update: ' . $e->getMessage()
+        'message' => 'Failed to add update. Please try again.'
     ]);
 }
-
 mysqli_close($dbc);
 ?>
