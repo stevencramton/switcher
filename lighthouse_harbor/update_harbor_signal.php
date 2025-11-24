@@ -4,7 +4,6 @@ date_default_timezone_set('America/New_York');
 include '../../mysqli_connect.php';
 include '../../templates/functions.php';
 
-// Security checks
 if (!isset($_SERVER['HTTP_X_REQUESTED_WITH']) || strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) !== 'xmlhttprequest') {
     http_response_code(403);
     die(json_encode(['success' => false, 'message' => 'Invalid request']));
@@ -43,7 +42,6 @@ if (mysqli_num_rows($ownership_result) == 0) {
 
 $signal_data = mysqli_fetch_assoc($ownership_result);
 
-// Check if user owns this signal or is an admin
 if ($signal_data['sent_by'] != $user_id && !$is_admin) {
     http_response_code(403);
     echo json_encode(['success' => false, 'message' => 'You can only update your own signals']);
@@ -52,26 +50,19 @@ if ($signal_data['sent_by'] != $user_id && !$is_admin) {
 
 $old_values = $signal_data;
 
-// Generate timestamp using PHP
 $current_datetime = date('Y-m-d H:i:s');
 
-// Start transaction
 mysqli_begin_transaction($dbc);
 
 try {
-    // Determine if signal is being resolved
-    $resolved_date = null;
+ 	$resolved_date = null;
     if ($sea_state_id == 4 && $old_values['sea_state_id'] != 4) {
-        // Beacon changed to "Resolved"
-        $resolved_date = $current_datetime;
+     	$resolved_date = $current_datetime;
     } elseif ($sea_state_id != 4 && $old_values['sea_state_id'] == 4) {
-        // Beacon changed from "Resolved" to something else
-        $resolved_date = null;
+     	$resolved_date = null;
     }
     
-    // Build update query - users can update: title, message, sea_state_id, priority_id, resolution_notes
-    // Users can only update their own signals, admins can update any signal
-    $query = "UPDATE lh_signals SET 
+	$query = "UPDATE lh_signals SET 
               title = ?,
               message = ?,
               sea_state_id = ?,
@@ -105,8 +96,7 @@ try {
         throw new Exception('Failed to update signal');
     }
     
-    // Log activity for changes
-    $activities = [];
+	$activities = [];
     
     if ($old_values['sea_state_id'] != $sea_state_id) {
         $activity_value = $is_admin ? 'Beacon updated by keeper' : 'Beacon updated by sender';
@@ -123,8 +113,7 @@ try {
         $activities[] = ['type' => 'resolved', 'value' => $activity_value];
     }
     
-    // Insert activity logs with explicit timestamp
-    foreach ($activities as $activity) {
+	foreach ($activities as $activity) {
         $activity_query = "INSERT INTO lh_signal_activity (signal_id, user_id, activity_type, new_value, created_date) 
                           VALUES (?, ?, ?, ?, ?)";
         $activity_stmt = mysqli_prepare($dbc, $activity_query);
@@ -137,8 +126,7 @@ try {
         }
     }
     
-    // Commit transaction
-    mysqli_commit($dbc);
+	mysqli_commit($dbc);
     
     echo json_encode([
         'success' => true,
@@ -147,9 +135,10 @@ try {
     
 } catch (Exception $e) {
     mysqli_rollback($dbc);
+    error_log('Update harbor signal error (Signal ID: ' . $signal_id . ', User ID: ' . $user_id . '): ' . $e->getMessage());
     echo json_encode([
         'success' => false,
-        'message' => 'Failed to update signal: ' . $e->getMessage()
+        'message' => 'Failed to update signal. Please try again.'
     ]);
 }
 ?>
