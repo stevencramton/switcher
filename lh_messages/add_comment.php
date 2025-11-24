@@ -86,9 +86,10 @@ try {
     
 } catch (Exception $e) {
     mysqli_rollback($dbc);
+    error_log('Add comment error (Signal ID: ' . $signal_id . ', User ID: ' . $user_id . '): ' . $e->getMessage());
     echo json_encode([
         'success' => false,
-        'message' => 'Failed to add comment: ' . $e->getMessage()
+        'message' => 'Failed to add comment. Please try again.'
     ]);
 }
 ?>
