@@ -181,6 +181,28 @@ include 'templates/header.php';
     font-weight: 700;
     color: #1f2937;
     margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.default-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+    color: #78350f;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    box-shadow: 0 2px 4px rgba(251, 191, 36, 0.3);
+}
+
+.default-badge i {
+    font-size: 10px;
 }
 
 .dock-description {
@@ -268,6 +290,18 @@ include 'templates/header.php';
     background: #f9fafb;
     border-color: #d1d5db;
     color: #1f2937;
+}
+
+.btn-action.default:hover {
+    background: #fffbeb;
+    border-color: #fcd34d;
+    color: #d97706;
+}
+
+.btn-action.default.is-default {
+    background: #fef3c7;
+    border-color: #fbbf24;
+    color: #d97706;
 }
 
 .btn-action.delete:hover {
@@ -395,6 +429,37 @@ include 'templates/header.php';
     z-index: 10000;
     font-weight: 600;
 }
+
+/* Default dock info box */
+.default-dock-info {
+    background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+    border: 1px solid #fcd34d;
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.default-dock-info i {
+    font-size: 20px;
+    color: #d97706;
+}
+
+.default-dock-info-text {
+    flex: 1;
+}
+
+.default-dock-info-text strong {
+    color: #92400e;
+}
+
+.default-dock-info-text p {
+    margin: 0;
+    font-size: 13px;
+    color: #78350f;
+}
 </style>
 
 <main class="page-content pt-2">
@@ -433,6 +498,15 @@ include 'templates/header.php';
                 <div class="drag-hint">
                     <i class="fa-solid fa-grip-vertical"></i>
                     <span>Drag to reorder</span>
+                </div>
+            </div>
+            
+            <!-- Default Dock Info Box -->
+            <div id="lh-default-dock-info" class="default-dock-info" style="display: none;">
+                <i class="fa-solid fa-star"></i>
+                <div class="default-dock-info-text">
+                    <strong>Default Dock:</strong> <span id="lh-default-dock-name">None</span>
+                    <p>New signals from the Harbor will be automatically assigned to this dock.</p>
                 </div>
             </div>
             
@@ -498,29 +572,27 @@ include 'templates/header.php';
                                         </label>
                                         <div class="input-group">
                                             <input type="color" class="form-control form-control-color" id="lh-color" name="dock_color" value="#007bff" required>
-                                            <input type="text" class="form-control" id="lh-color-hex" placeholder="#007bff" maxlength="7">
+                                            <input type="text" class="form-control" id="lh-color-hex" value="#007bff" readonly style="max-width: 100px;">
                                         </div>
                                     </div>
                                 </div>
-
                                 <div class="col-md-6">
                                     <div class="mb-3">
                                         <label for="lh-icon" class="form-label">
                                             Icon <span class="text-danger">*</span>
                                         </label>
                                         <div class="input-group">
-                                            <input type="text" class="form-control" id="lh-icon" name="dock_icon" value="fa-solid fa-folder" required readonly>
                                             <span class="input-group-text" id="lh-icon-display">
                                                 <i class="fa-solid fa-folder"></i>
                                             </span>
+                                            <input type="text" class="form-control iconpicker" id="lh-icon" name="dock_icon" value="fa-solid fa-folder" required readonly>
                                         </div>
-                                        <small class="text-muted">Click the icon to choose</small>
                                     </div>
                                 </div>
                             </div>
 
-                            <div class="form-check">
-                                <input class="form-check-input" type="checkbox" id="lh-active" name="is_active" checked>
+                            <div class="form-check mb-3">
+                                <input class="form-check-input" type="checkbox" id="lh-active" name="is_active" value="1" checked>
                                 <label class="form-check-label" for="lh-active">
                                     Active
                                 </label>
@@ -529,21 +601,23 @@ include 'templates/header.php';
 
                         <!-- Right Column - Preview -->
                         <div class="col-md-4">
-                            <label class="form-label">Preview</label>
-                            <div class="text-center">
-                                <div class="color-preview mx-auto" id="lh-preview">
-                                    <i class="fa-solid fa-folder"></i>
+                            <div class="mb-3">
+                                <label class="form-label">Preview</label>
+                                <div class="text-center p-4" style="background: #f9fafb; border-radius: 6px; border: 1px solid #e5e7eb;">
+                                    <div id="lh-preview" class="color-preview mx-auto mb-3" style="background: #007bff;">
+                                        <i class="fa-solid fa-folder"></i>
+                                    </div>
+                                    <div id="lh-preview-name" style="font-weight: 600; color: #1f2937;">Dock Name</div>
                                 </div>
-                                <p class="mt-3 mb-0 fw-bold" id="lh-preview-name">Dock Name</p>
                             </div>
                         </div>
                     </div>
                 </form>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal"><i class="fa-solid fa-circle-xmark"></i> Cancel</button>
-                <button type="submit" form="lh-form" class="btn btn-salmon" id="lh-save-btn">
-                    <i class="fa-solid fa-cloud"></i> Save Dock
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="lh-save-btn" onclick="$('#lh-form').submit();">
+                    <i class="fa-solid fa-save me-1"></i> Save Dock
                 </button>
             </div>
         </div>
@@ -576,13 +650,36 @@ function lhRenderDocks(docks) {
     
     if (docks.length === 0) {
         lhShowEmptyState();
+        $('#lh-default-dock-info').hide();
         return;
     }
     
     $('#lh-empty-state').hide();
     
+    // Find the default dock
+    let defaultDock = docks.find(d => parseInt(d.is_default) === 1);
+    if (defaultDock) {
+        $('#lh-default-dock-name').text(defaultDock.dock_name);
+        $('#lh-default-dock-info').show();
+    } else {
+        $('#lh-default-dock-info').hide();
+    }
+    
     docks.forEach((dept, index) => {
         const isActive = parseInt(dept.is_active) === 1;
+        const isDefault = parseInt(dept.is_default) === 1;
+        
+        const defaultBadge = isDefault ? 
+            '<span class="default-badge"><i class="fa-solid fa-star"></i> Default</span>' : '';
+        
+        const setDefaultBtn = isDefault ?
+            `<button type="button" class="btn-action default is-default" title="This is the default dock" disabled>
+                <i class="fa-solid fa-star"></i>
+            </button>` :
+            `<button type="button" class="btn-action default" onclick="lhSetDefaultDock(${dept.dock_id})" title="Set as Default">
+                <i class="fa-regular fa-star"></i>
+            </button>`;
+        
         const item = `
             <li class="dock-item mb-2" data-id="${dept.dock_id}" data-order="${dept.dock_order}">
                 <div class="drag-handle">
@@ -593,7 +690,10 @@ function lhRenderDocks(docks) {
                     <i class="${dept.dock_icon || 'fa-solid fa-folder'}"></i>
                 </div>
                 <div class="dock-info">
-                    <div class="dock-name">${lhEscapeHtml(dept.dock_name)}</div>
+                    <div class="dock-name">
+                        ${lhEscapeHtml(dept.dock_name)}
+                        ${defaultBadge}
+                    </div>
                     <div class="dock-description">${lhEscapeHtml(dept.dock_description || '')}</div>
                 </div>
                 <div class="dock-meta">
@@ -602,6 +702,7 @@ function lhRenderDocks(docks) {
                         <span class="status-label">${isActive ? 'Active' : 'Inactive'}</span>
                     </div>
                     <div class="dock-actions">
+                        ${setDefaultBtn}
                         <button type="button" class="btn-action" onclick="lhEditDock(${dept.dock_id})" title="Edit">
                             <i class="fa-solid fa-edit"></i>
                         </button>
@@ -649,13 +750,43 @@ function lhRenderDocks(docks) {
     }
 }
 
+function lhSetDefaultDock(dockId) {
+    if (!confirm('Set this dock as the default? New signals from the Harbor will be automatically assigned to this dock.')) {
+        return;
+    }
+    
+    $.ajax({
+        url: 'ajax/lh_docks/set_default_dock.php',
+        method: 'POST',
+        data: { dock_id: dockId },
+        dataType: 'json',
+        success: function(response) {
+            if (response.success) {
+                lhShowSaveIndicator('Default dock updated!');
+                lhLoadDocks();
+            } else {
+                alert(response.message || 'Failed to set default dock');
+            }
+        },
+        error: function(xhr, status, error) {
+            console.error('Failed to set default dock:', error);
+            alert('Failed to set default dock. Please try again.');
+        }
+    });
+}
+
 function lhShowEmptyState() {
     $('#lh-docks-list').empty();
     $('#lh-empty-state').show();
 }
 
-function lhShowSaveIndicator() {
+function lhShowSaveIndicator(message) {
     const $indicator = $('#lh-save-indicator');
+    if (message) {
+        $indicator.html('<i class="fa-solid fa-check-circle me-2"></i>' + message);
+    } else {
+        $indicator.html('<i class="fa-solid fa-check-circle me-2"></i>Order saved successfully');
+    }
     $indicator.fadeIn(300);
     
     setTimeout(function() {
