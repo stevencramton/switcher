@@ -18,7 +18,8 @@ include 'templates/header.php';
 
 $url_dock = isset($_GET['dock']) && is_numeric($_GET['dock']) ? (int)$_GET['dock'] : null;
 $url_state = isset($_GET['state']) && is_numeric($_GET['state']) ? (int)$_GET['state'] : null;
-$url_filter = isset($_GET['filter']) ? $_GET['filter'] : null;
+$valid_filters = ['my_signals', 'all', 'assigned', 'my_closed_signals'];
+$url_filter = isset($_GET['filter']) && in_array($_GET['filter'], $valid_filters, true) ? $_GET['filter'] : null;
 $url_action = isset($_GET['action']) ? $_GET['action'] : null;
 
 $current_dock = null;
@@ -1345,7 +1346,7 @@ let currentFilters = {
 	dock: <?php echo $url_dock ? $url_dock : "'all'"; ?>,
 	state: <?php echo $url_state ? $url_state : "null"; ?>,
 	priority: null,
-	owner: <?php echo $url_filter ? "'" . $url_filter . "'" : "'my_signals'"; ?>,
+	owner: <?php echo $url_filter ? json_encode($url_filter, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) : "'my_signals'"; ?>,
 	search: ''
 };
 
