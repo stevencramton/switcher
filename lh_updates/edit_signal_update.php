@@ -6,7 +6,6 @@ include '../../templates/functions.php';
 
 header('Content-Type: application/json');
 
-// Security checks
 if (!isset($_SERVER['HTTP_X_REQUESTED_WITH']) || strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) !== 'xmlhttprequest') {
     http_response_code(403);
     die(json_encode(['success' => false, 'message' => 'Invalid request']));
@@ -20,94 +19,80 @@ if (!isset($_SESSION['id'])) {
 $user_id = $_SESSION['id'];
 $is_admin = checkRole('lighthouse_keeper');
 
-// Only admins can edit updates
-if (!$is_admin) {
-    echo json_encode(['success' => false, 'message' => 'Permission denied - admin access required']);
+if (empty($_POST['comment_id'])) {
+    echo json_encode(['success' => false, 'message' => 'Missing comment ID']);
     exit();
 }
 
-// Validate required fields
-if (empty($_POST['update_id'])) {
-    echo json_encode(['success' => false, 'message' => 'Missing update ID']);
-    exit();
-}
+$comment_id = (int)$_POST['comment_id'];
 
-$update_id = (int)$_POST['update_id'];
-$message = isset($_POST['message']) ? trim($_POST['message']) : '';
-$is_internal = isset($_POST['is_internal']) ? (int)$_POST['is_internal'] : 0;
-
-// Verify update exists and get signal info
-$verify_query = "SELECT u.update_id, u.signal_id, u.user_id, u.update_type, s.is_deleted
-                 FROM lh_signal_updates u
+$verify_query = "SELECT uc.update_id, uc.user_id, u.signal_id 
+                 FROM lh_signal_update_comments uc
+                 INNER JOIN lh_signal_updates u ON uc.update_id = u.update_id
                  INNER JOIN lh_signals s ON u.signal_id = s.signal_id
-                 WHERE u.update_id = ? AND s.is_deleted = 0";
+                 WHERE uc.comment_id = ? AND s.is_deleted = 0";
 $verify_stmt = mysqli_prepare($dbc, $verify_query);
-mysqli_stmt_bind_param($verify_stmt, 'i', $update_id);
+mysqli_stmt_bind_param($verify_stmt, 'i', $comment_id);
 mysqli_stmt_execute($verify_stmt);
 $verify_result = mysqli_stmt_get_result($verify_stmt);
 
 if (mysqli_num_rows($verify_result) == 0) {
-    echo json_encode(['success' => false, 'message' => 'Update not found']);
+    echo json_encode(['success' => false, 'message' => 'Comment not found']);
     exit();
 }
 
-$update_data = mysqli_fetch_assoc($verify_result);
+$comment_data = mysqli_fetch_assoc($verify_result);
 
-// Verify the update was created by an admin (not a user)
-// This prevents editing user-created updates
-$update_creator_is_admin = checkRole('lighthouse_keeper', $update_data['user_id']);
-if (!$update_creator_is_admin) {
-    echo json_encode(['success' => false, 'message' => 'Cannot edit user-created updates']);
+if (!$is_admin && $comment_data['user_id'] != $user_id) {
+    echo json_encode(['success' => false, 'message' => 'Permission denied']);
     exit();
 }
 
 $current_datetime = date('Y-m-d H:i:s');
 
-// Start transaction
 mysqli_begin_transaction($dbc);
 
 try {
-    // Update the signal update
-    $query = "UPDATE lh_signal_updates SET message = ?, is_internal = ? WHERE update_id = ?";
+ 	$query = "DELETE FROM lh_signal_update_comments WHERE comment_id = ?";
     $stmt = mysqli_prepare($dbc, $query);
-    mysqli_stmt_bind_param($stmt, 'sii', $message, $is_internal, $update_id);
+    mysqli_stmt_bind_param($stmt, 'i', $comment_id);
     
     if (!mysqli_stmt_execute($stmt)) {
-        throw new Exception('Failed to update signal update');
+        throw new Exception('Failed to delete comment');
     }
     
-    // Log activity
-    $activity_query = "INSERT INTO lh_signal_activity (signal_id, user_id, activity_type, new_value, created_date) 
-                      VALUES (?, ?, 'update_edited', 'Edited a signal update', ?)";
+	$activity_query = "INSERT INTO lh_signal_activity (signal_id, user_id, activity_type, new_value, created_date) 
+                      VALUES (?, ?, 'comment_deleted', 'Deleted a comment from an update', ?)";
     $activity_stmt = mysqli_prepare($dbc, $activity_query);
-    mysqli_stmt_bind_param($activity_stmt, 'iis', $update_data['signal_id'], $user_id, $current_datetime);
+    mysqli_stmt_bind_param($activity_stmt, 'iis', $comment_data['signal_id'], $user_id, $current_datetime);
     
     if (!mysqli_stmt_execute($activity_stmt)) {
         throw new Exception('Failed to log activity');
     }
     
-    // Update signal updated_date
-    $update_query = "UPDATE lh_signals SET updated_date = ? WHERE signal_id = ?";
+	$update_query = "UPDATE lh_signals SET updated_date = ? WHERE signal_id = ?";
     $update_stmt = mysqli_prepare($dbc, $update_query);
-    mysqli_stmt_bind_param($update_stmt, 'si', $current_datetime, $update_data['signal_id']);
+    mysqli_stmt_bind_param($update_stmt, 'si', $current_datetime, $comment_data['signal_id']);
     
     if (!mysqli_stmt_execute($update_stmt)) {
         throw new Exception('Failed to update signal timestamp');
     }
     
-    // Commit transaction
-    mysqli_commit($dbc);
+	mysqli_commit($dbc);
     
     echo json_encode([
         'success' => true,
-        'message' => 'Update edited successfully'
+        'message' => 'Comment deleted successfully'
     ]);
     
 } catch (Exception $e) {
     mysqli_rollback($dbc);
+    
+	error_log('Failed to delete update comment (ID: ' . $comment_id . '): ' . $e->getMessage());
+    
     echo json_encode([
         'success' => false,
-        'message' => 'Failed to edit update: ' . $e->getMessage()
+        'message' => 'Failed to delete comment. Please try again or contact support.'
     ]);
 }
 
