@@ -1220,7 +1220,7 @@ if (mysqli_num_rows($check_view_result) > 0) {
                         <div class="shareable-link">
                             <i class="fa-solid fa-link" style="color: #6b7280;"></i>
                             <input type="text" id="signalShareLink" readonly 
-                                   value="<?php echo 'https://' . $_SERVER['HTTP_HOST'] . '/dashboard/lighthouse_harbor_view.php?id=' . $signal_id; ?>">
+                                   value="<?php echo htmlspecialchars('https://' . $_SERVER['HTTP_HOST'] . '/dashboard/lighthouse_harbor_view.php?id=' . $signal_id, ENT_QUOTES, 'UTF-8'); ?>">
                             <button type="button" class="btn-copy-link" onclick="copyShareLink()">
                                 <i class="fa-solid fa-copy"></i> Copy
                             </button>
