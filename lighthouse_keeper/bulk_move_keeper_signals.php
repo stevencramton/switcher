@@ -4,7 +4,6 @@ date_default_timezone_set('America/New_York');
 include '../../mysqli_connect.php';
 include '../../templates/functions.php';
 
-// Security checks
 if (!isset($_SERVER['HTTP_X_REQUESTED_WITH']) || strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) !== 'xmlhttprequest') {
     http_response_code(403);
     die(json_encode(['success' => false, 'message' => 'Invalid request']));
@@ -17,32 +16,26 @@ if (!isset($_SESSION['id'])){
 
 $user_id = $_SESSION['id'];
 $is_admin = checkRole('lighthouse_keeper');
-
-// Get signal IDs array and target dock
 $signal_ids = isset($_POST['signal_ids']) ? $_POST['signal_ids'] : [];
 $target_dock_id = isset($_POST['dock_id']) ? $_POST['dock_id'] : '';
 
-// Check if we're unassigning (null) or assigning to a dock
 $is_unassign = ($target_dock_id === 'null');
 $target_dock_id = $is_unassign ? null : (int)$target_dock_id;
 
-// Validate that we have signal IDs
 if (empty($signal_ids) || !is_array($signal_ids)) {
     http_response_code(400);
     die(json_encode(['success' => false, 'message' => 'No signals selected']));
 }
 
-// If not unassigning, validate dock ID and verify it exists
 $target_dock = null;
+
 if (!$is_unassign) {
-    // Validate dock ID
-    if ($target_dock_id <= 0) {
+	if ($target_dock_id <= 0) {
         http_response_code(400);
         die(json_encode(['success' => false, 'message' => 'Invalid dock selected']));
     }
     
-    // Verify the target dock exists
-    $dock_check_query = "SELECT dock_id, dock_name FROM lh_docks WHERE dock_id = ? AND is_active = 1";
+	$dock_check_query = "SELECT dock_id, dock_name FROM lh_docks WHERE dock_id = ? AND is_active = 1";
     $dock_check_stmt = mysqli_prepare($dbc, $dock_check_query);
     mysqli_stmt_bind_param($dock_check_stmt, 'i', $target_dock_id);
     mysqli_stmt_execute($dock_check_stmt);
@@ -57,7 +50,6 @@ if (!$is_unassign) {
     mysqli_stmt_close($dock_check_stmt);
 }
 
-// Sanitize signal IDs
 $signal_ids = array_map('intval', $signal_ids);
 $signal_ids = array_filter($signal_ids, function($id) { return $id > 0; });
 
@@ -66,12 +58,10 @@ if (empty($signal_ids)) {
     die(json_encode(['success' => false, 'message' => 'Invalid signal IDs']));
 }
 
-// Check permissions for each signal
 $placeholders = implode(',', array_fill(0, count($signal_ids), '?'));
 $check_query = "SELECT signal_id, sent_by, dock_id FROM lh_signals WHERE signal_id IN ($placeholders) AND is_deleted = 0";
 $check_stmt = mysqli_prepare($dbc, $check_query);
 
-// Bind parameters dynamically
 $types = str_repeat('i', count($signal_ids));
 mysqli_stmt_bind_param($check_stmt, $types, ...$signal_ids);
 mysqli_stmt_execute($check_stmt);
@@ -82,22 +72,19 @@ $permission_denied = [];
 $already_in_dock = [];
 
 while ($signal = mysqli_fetch_assoc($check_result)) {
-    // For unassignment, check if signal already has no dock
-    if ($is_unassign) {
+	if ($is_unassign) {
         if ($signal['dock_id'] === null || $signal['dock_id'] == 0) {
             $already_in_dock[] = $signal['signal_id'];
             continue;
         }
     } else {
-        // Check if signal is already in target dock
-        if ($signal['dock_id'] == $target_dock_id) {
+    	if ($signal['dock_id'] == $target_dock_id) {
             $already_in_dock[] = $signal['signal_id'];
             continue;
         }
     }
     
-    // Check permissions - admins can move any signal, users can only move their own
-    if ($is_admin || $signal['sent_by'] == $user_id) {
+ 	if ($is_admin || $signal['sent_by'] == $user_id) {
         $signals_to_move[] = $signal['signal_id'];
     } else {
         $permission_denied[] = $signal['signal_id'];
@@ -106,7 +93,6 @@ while ($signal = mysqli_fetch_assoc($check_result)) {
 
 mysqli_stmt_close($check_stmt);
 
-// If no signals can be moved, return appropriate error
 if (empty($signals_to_move)) {
     if (!empty($already_in_dock)) {
         $error_message = $is_unassign 
@@ -126,25 +112,20 @@ if (empty($signals_to_move)) {
     }
 }
 
-// *** CHANGE: Generate timestamp using PHP instead of MySQL NOW() ***
 $current_datetime = date('Y-m-d H:i:s');
 
-// Start transaction
 mysqli_begin_transaction($dbc);
 
 try {
     $moved_count = 0;
     
-    // Move each signal to the new dock (or unassign)
-    foreach ($signals_to_move as $signal_id) {
+ 	foreach ($signals_to_move as $signal_id) {
         if ($is_unassign) {
-            // Unassign dock (set to NULL)
-            $move_query = "UPDATE lh_signals SET dock_id = NULL, updated_date = ? WHERE signal_id = ?";
+         	$move_query = "UPDATE lh_signals SET dock_id = NULL, updated_date = ? WHERE signal_id = ?";
             $move_stmt = mysqli_prepare($dbc, $move_query);
             mysqli_stmt_bind_param($move_stmt, "si", $current_datetime, $signal_id);
         } else {
-            // Assign to specific dock
-            $move_query = "UPDATE lh_signals SET dock_id = ?, updated_date = ? WHERE signal_id = ?";
+         	$move_query = "UPDATE lh_signals SET dock_id = ?, updated_date = ? WHERE signal_id = ?";
             $move_stmt = mysqli_prepare($dbc, $move_query);
             mysqli_stmt_bind_param($move_stmt, "isi", $target_dock_id, $current_datetime, $signal_id);
         }
@@ -152,8 +133,7 @@ try {
         if (mysqli_stmt_execute($move_stmt)) {
             $moved_count++;
             
-            // Log the move in activity with explicit timestamp
-            $activity_value = $is_unassign ? 'Unassigned from dock' : $target_dock['dock_name'];
+        	$activity_value = $is_unassign ? 'Unassigned from dock' : $target_dock['dock_name'];
             $activity_query = "INSERT INTO lh_signal_activity (signal_id, user_id, activity_type, old_value, new_value, created_date) 
                                VALUES (?, ?, 'dock_changed', '', ?, ?)";
             $activity_stmt = mysqli_prepare($dbc, $activity_query);
@@ -165,8 +145,7 @@ try {
         mysqli_stmt_close($move_stmt);
     }
     
-    // Commit transaction
-    mysqli_commit($dbc);
+ 	mysqli_commit($dbc);
     
     $message = $is_unassign 
         ? "Successfully unassigned $moved_count signal(s) from docks"
@@ -193,13 +172,13 @@ try {
     ]);
     
 } catch (Exception $e) {
-    // Rollback on error
-    mysqli_rollback($dbc);
+	mysqli_rollback($dbc);
     
+    error_log('Bulk move keeper signals error (User ID: ' . $user_id . '): ' . $e->getMessage());
     http_response_code(500);
     echo json_encode([
         'success' => false,
-        'message' => 'Failed to move signals: ' . $e->getMessage()
+        'message' => 'Failed to move signals. Please try again.'
     ]);
 }
 ?>
