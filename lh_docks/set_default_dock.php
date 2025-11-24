@@ -4,8 +4,7 @@ date_default_timezone_set('America/New_York');
 include '../../mysqli_connect.php';
 include '../../templates/functions.php';
 
-header('Content-Type: application/json');
-
+// Security checks
 if (!isset($_SERVER['HTTP_X_REQUESTED_WITH']) || strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) !== 'xmlhttprequest') {
     http_response_code(403);
     die(json_encode(['success' => false, 'message' => 'Invalid request']));
@@ -16,89 +15,78 @@ if (!isset($_SESSION['id'])) {
     die(json_encode(['success' => false, 'message' => 'Not authenticated']));
 }
 
+if (!checkRole('lighthouse_maritime')) {
+    http_response_code(403);
+    die(json_encode(['success' => false, 'message' => 'Insufficient permissions']));
+}
+
+// Validate required fields
+if (!isset($_POST['dock_id']) || !is_numeric($_POST['dock_id'])) {
+    echo json_encode(['success' => false, 'message' => 'Invalid dock ID']);
+    exit();
+}
+
+$dock_id = (int)$_POST['dock_id'];
 $user_id = $_SESSION['id'];
-$is_admin = checkRole('lighthouse_keeper');
 
-if (empty($_POST['comment_id']) || empty($_POST['comment_text'])) {
-    echo json_encode(['success' => false, 'message' => 'Missing required fields']);
+// Verify the dock exists and is active
+$check_query = "SELECT dock_id, dock_name, is_active FROM lh_docks WHERE dock_id = ?";
+$check_stmt = mysqli_prepare($dbc, $check_query);
+mysqli_stmt_bind_param($check_stmt, "i", $dock_id);
+mysqli_stmt_execute($check_stmt);
+$check_result = mysqli_stmt_get_result($check_stmt);
+
+if (!$check_result || mysqli_num_rows($check_result) === 0) {
+    echo json_encode(['success' => false, 'message' => 'Dock not found']);
     exit();
 }
 
-$comment_id = (int)$_POST['comment_id'];
-$comment_text = trim($_POST['comment_text']);
-$is_internal = isset($_POST['is_internal']) ? (int)$_POST['is_internal'] : 0;
+$dock = mysqli_fetch_assoc($check_result);
+mysqli_stmt_close($check_stmt);
 
-$verify_query = "SELECT uc.update_id, uc.user_id, u.signal_id, u.is_internal as update_is_internal
-                 FROM lh_signal_update_comments uc
-                 INNER JOIN lh_signal_updates u ON uc.update_id = u.update_id
-                 INNER JOIN lh_signals s ON u.signal_id = s.signal_id
-                 WHERE uc.comment_id = ? AND s.is_deleted = 0";
-$verify_stmt = mysqli_prepare($dbc, $verify_query);
-mysqli_stmt_bind_param($verify_stmt, 'i', $comment_id);
-mysqli_stmt_execute($verify_stmt);
-$verify_result = mysqli_stmt_get_result($verify_stmt);
-
-if (mysqli_num_rows($verify_result) == 0) {
-    echo json_encode(['success' => false, 'message' => 'Comment not found']);
+if (!$dock['is_active']) {
+    echo json_encode(['success' => false, 'message' => 'Cannot set an inactive dock as default']);
     exit();
 }
 
-$comment_data = mysqli_fetch_assoc($verify_result);
-
-if ($comment_data['update_is_internal'] == 1) {
-    $is_internal = 1;
-}
-
-if (!$is_admin && $comment_data['user_id'] != $user_id) {
-    echo json_encode(['success' => false, 'message' => 'Permission denied']);
-    exit();
-}
-
-$current_datetime = date('Y-m-d H:i:s');
-
+// Start transaction
 mysqli_begin_transaction($dbc);
 
 try {
-	$query = "UPDATE lh_signal_update_comments SET comment_text = ?, is_internal = ? WHERE comment_id = ?";
-    $stmt = mysqli_prepare($dbc, $query);
-    mysqli_stmt_bind_param($stmt, 'sii', $comment_text, $is_internal, $comment_id);
+    // First, clear all default flags
+    $clear_query = "UPDATE lh_docks SET is_default = 0";
+    if (!mysqli_query($dbc, $clear_query)) {
+        throw new Exception('Failed to clear default flags');
+    }
+    
+    // Then, set the selected dock as default
+    $set_query = "UPDATE lh_docks SET is_default = 1 WHERE dock_id = ?";
+    $stmt = mysqli_prepare($dbc, $set_query);
+    mysqli_stmt_bind_param($stmt, "i", $dock_id);
     
     if (!mysqli_stmt_execute($stmt)) {
-        throw new Exception('Failed to update comment');
+        throw new Exception('Failed to set default dock');
     }
     
-	$activity_query = "INSERT INTO lh_signal_activity (signal_id, user_id, activity_type, new_value, created_date) 
-                      VALUES (?, ?, 'comment_edited', 'Edited a comment on an update', ?)";
-    $activity_stmt = mysqli_prepare($dbc, $activity_query);
-    mysqli_stmt_bind_param($activity_stmt, 'iis', $comment_data['signal_id'], $user_id, $current_datetime);
+    mysqli_stmt_close($stmt);
     
-    if (!mysqli_stmt_execute($activity_stmt)) {
-        throw new Exception('Failed to log activity');
-    }
-    
-	$update_query = "UPDATE lh_signals SET updated_date = ? WHERE signal_id = ?";
-    $update_stmt = mysqli_prepare($dbc, $update_query);
-    mysqli_stmt_bind_param($update_stmt, 'si', $current_datetime, $comment_data['signal_id']);
-    
-    if (!mysqli_stmt_execute($update_stmt)) {
-        throw new Exception('Failed to update signal timestamp');
-    }
-    
-	mysqli_commit($dbc);
+    // Commit transaction
+    mysqli_commit($dbc);
     
     echo json_encode([
         'success' => true,
-        'message' => 'Comment updated successfully'
+        'message' => 'Default dock updated successfully',
+        'dock_name' => $dock['dock_name']
     ]);
     
 } catch (Exception $e) {
+    // Rollback on error
     mysqli_rollback($dbc);
     
-	error_log('Failed to update comment (ID: ' . $comment_id . '): ' . $e->getMessage());
-    
+    http_response_code(500);
     echo json_encode([
         'success' => false,
-        'message' => 'Failed to update comment. Please try again or contact support.'
+        'message' => 'Failed to update default dock: ' . $e->getMessage()
     ]);
 }
 
