@@ -6,7 +6,6 @@ include '../../templates/functions.php';
 
 header('Content-Type: application/json');
 
-// Security checks
 if (!isset($_SERVER['HTTP_X_REQUESTED_WITH']) || strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) !== 'xmlhttprequest') {
     http_response_code(403);
     die(json_encode(['success' => false, 'message' => 'Invalid request']));
@@ -20,13 +19,11 @@ if (!isset($_SESSION['id'])) {
 $user_id = $_SESSION['id'];
 $is_admin = checkRole('lighthouse_keeper');
 
-// Only admins can delete updates
 if (!$is_admin) {
     echo json_encode(['success' => false, 'message' => 'Permission denied - admin access required']);
     exit();
 }
 
-// Validate required fields
 if (empty($_POST['update_id'])) {
     echo json_encode(['success' => false, 'message' => 'Missing update ID']);
     exit();
@@ -34,7 +31,6 @@ if (empty($_POST['update_id'])) {
 
 $update_id = (int)$_POST['update_id'];
 
-// Verify update exists and get signal info
 $verify_query = "SELECT u.update_id, u.signal_id, u.user_id, u.update_type, s.is_deleted
                  FROM lh_signal_updates u
                  INNER JOIN lh_signals s ON u.signal_id = s.signal_id
@@ -51,8 +47,6 @@ if (mysqli_num_rows($verify_result) == 0) {
 
 $update_data = mysqli_fetch_assoc($verify_result);
 
-// Verify the update was created by an admin (not a user)
-// This prevents deleting user-created updates
 $update_creator_is_admin = checkRole('lighthouse_keeper', $update_data['user_id']);
 if (!$update_creator_is_admin) {
     echo json_encode(['success' => false, 'message' => 'Cannot delete user-created updates']);
@@ -61,12 +55,10 @@ if (!$update_creator_is_admin) {
 
 $current_datetime = date('Y-m-d H:i:s');
 
-// Start transaction
 mysqli_begin_transaction($dbc);
 
 try {
-    // First, delete any comments associated with this update
-    $delete_comments_query = "DELETE FROM lh_signal_update_comments WHERE update_id = ?";
+	$delete_comments_query = "DELETE FROM lh_signal_update_comments WHERE update_id = ?";
     $delete_comments_stmt = mysqli_prepare($dbc, $delete_comments_query);
     mysqli_stmt_bind_param($delete_comments_stmt, 'i', $update_id);
     
@@ -74,8 +66,7 @@ try {
         throw new Exception('Failed to delete associated comments');
     }
     
-    // Delete the signal update
-    $query = "DELETE FROM lh_signal_updates WHERE update_id = ?";
+	$query = "DELETE FROM lh_signal_updates WHERE update_id = ?";
     $stmt = mysqli_prepare($dbc, $query);
     mysqli_stmt_bind_param($stmt, 'i', $update_id);
     
@@ -83,8 +74,7 @@ try {
         throw new Exception('Failed to delete signal update');
     }
     
-    // Log activity
-    $activity_query = "INSERT INTO lh_signal_activity (signal_id, user_id, activity_type, new_value, created_date) 
+	$activity_query = "INSERT INTO lh_signal_activity (signal_id, user_id, activity_type, new_value, created_date) 
                       VALUES (?, ?, 'update_deleted', 'Deleted a signal update', ?)";
     $activity_stmt = mysqli_prepare($dbc, $activity_query);
     mysqli_stmt_bind_param($activity_stmt, 'iis', $update_data['signal_id'], $user_id, $current_datetime);
@@ -93,8 +83,7 @@ try {
         throw new Exception('Failed to log activity');
     }
     
-    // Update signal updated_date
-    $update_query = "UPDATE lh_signals SET updated_date = ? WHERE signal_id = ?";
+	$update_query = "UPDATE lh_signals SET updated_date = ? WHERE signal_id = ?";
     $update_stmt = mysqli_prepare($dbc, $update_query);
     mysqli_stmt_bind_param($update_stmt, 'si', $current_datetime, $update_data['signal_id']);
     
@@ -102,8 +91,7 @@ try {
         throw new Exception('Failed to update signal timestamp');
     }
     
-    // Commit transaction
-    mysqli_commit($dbc);
+	mysqli_commit($dbc);
     
     echo json_encode([
         'success' => true,
@@ -112,9 +100,10 @@ try {
     
 } catch (Exception $e) {
     mysqli_rollback($dbc);
+    error_log('Delete signal update error (Update ID: ' . $update_id . ', User ID: ' . $user_id . '): ' . $e->getMessage());
     echo json_encode([
         'success' => false,
-        'message' => 'Failed to delete update: ' . $e->getMessage()
+        'message' => 'Failed to delete update. Please try again.'
     ]);
 }
 
