@@ -21,6 +21,7 @@ if (empty($_POST['sea_state_name']) || empty($_POST['sea_state_color'])) {
 }
 
 $sea_state_name = trim($_POST['sea_state_name']);
+$sea_state_description = isset($_POST['sea_state_description']) ? trim($_POST['sea_state_description']) : '';
 $sea_state_color = trim($_POST['sea_state_color']);
 $sea_state_icon = isset($_POST['sea_state_icon']) ? trim($_POST['sea_state_icon']) : 'fa-solid fa-circle';
 $is_active = isset($_POST['is_active']) ? 1 : 0;
@@ -34,12 +35,13 @@ $next_order = ($order_row['max_order'] ?? 0) + 1;
 
 // Insert sea state
 $query = "INSERT INTO lh_sea_states 
-          (sea_state_name, sea_state_color, sea_state_icon, sea_state_order, is_active, is_closed_resolution) 
-          VALUES (?, ?, ?, ?, ?, ?)";
+          (sea_state_name, sea_state_description, sea_state_color, sea_state_icon, sea_state_order, is_active, is_closed_resolution) 
+          VALUES (?, ?, ?, ?, ?, ?, ?)";
 
 $stmt = mysqli_prepare($dbc, $query);
-mysqli_stmt_bind_param($stmt, 'sssiii', 
-    $sea_state_name, 
+mysqli_stmt_bind_param($stmt, 'ssssiii', 
+    $sea_state_name,
+    $sea_state_description,
     $sea_state_color,
     $sea_state_icon,
     $next_order, 
