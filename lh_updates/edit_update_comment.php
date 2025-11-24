@@ -6,7 +6,6 @@ include '../../templates/functions.php';
 
 header('Content-Type: application/json');
 
-// Security checks
 if (!isset($_SERVER['HTTP_X_REQUESTED_WITH']) || strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) !== 'xmlhttprequest') {
     http_response_code(403);
     die(json_encode(['success' => false, 'message' => 'Invalid request']));
@@ -20,7 +19,6 @@ if (!isset($_SESSION['id'])) {
 $user_id = $_SESSION['id'];
 $is_admin = checkRole('lighthouse_keeper');
 
-// Validate required fields
 if (empty($_POST['comment_id']) || empty($_POST['comment_text'])) {
     echo json_encode(['success' => false, 'message' => 'Missing required fields']);
     exit();
@@ -30,7 +28,6 @@ $comment_id = (int)$_POST['comment_id'];
 $comment_text = trim($_POST['comment_text']);
 $is_internal = isset($_POST['is_internal']) ? (int)$_POST['is_internal'] : 0;
 
-// Verify comment exists and user has permission
 $verify_query = "SELECT uc.update_id, uc.user_id, u.signal_id, u.is_internal as update_is_internal
                  FROM lh_signal_update_comments uc
                  INNER JOIN lh_signal_updates u ON uc.update_id = u.update_id
@@ -48,12 +45,10 @@ if (mysqli_num_rows($verify_result) == 0) {
 
 $comment_data = mysqli_fetch_assoc($verify_result);
 
-// If parent update is internal, comment must also be internal
 if ($comment_data['update_is_internal'] == 1) {
     $is_internal = 1;
 }
 
-// Users can only edit their own comments, or admins can edit any
 if (!$is_admin && $comment_data['user_id'] != $user_id) {
     echo json_encode(['success' => false, 'message' => 'Permission denied']);
     exit();
@@ -61,12 +56,10 @@ if (!$is_admin && $comment_data['user_id'] != $user_id) {
 
 $current_datetime = date('Y-m-d H:i:s');
 
-// Start transaction
 mysqli_begin_transaction($dbc);
 
 try {
-    // Update comment
-    $query = "UPDATE lh_signal_update_comments SET comment_text = ?, is_internal = ? WHERE comment_id = ?";
+	$query = "UPDATE lh_signal_update_comments SET comment_text = ?, is_internal = ? WHERE comment_id = ?";
     $stmt = mysqli_prepare($dbc, $query);
     mysqli_stmt_bind_param($stmt, 'sii', $comment_text, $is_internal, $comment_id);
     
@@ -74,8 +67,7 @@ try {
         throw new Exception('Failed to update comment');
     }
     
-    // Log activity
-    $activity_query = "INSERT INTO lh_signal_activity (signal_id, user_id, activity_type, new_value, created_date) 
+	$activity_query = "INSERT INTO lh_signal_activity (signal_id, user_id, activity_type, new_value, created_date) 
                       VALUES (?, ?, 'comment_edited', 'Edited a comment on an update', ?)";
     $activity_stmt = mysqli_prepare($dbc, $activity_query);
     mysqli_stmt_bind_param($activity_stmt, 'iis', $comment_data['signal_id'], $user_id, $current_datetime);
@@ -84,8 +76,7 @@ try {
         throw new Exception('Failed to log activity');
     }
     
-    // Update signal updated_date
-    $update_query = "UPDATE lh_signals SET updated_date = ? WHERE signal_id = ?";
+	$update_query = "UPDATE lh_signals SET updated_date = ? WHERE signal_id = ?";
     $update_stmt = mysqli_prepare($dbc, $update_query);
     mysqli_stmt_bind_param($update_stmt, 'si', $current_datetime, $comment_data['signal_id']);
     
@@ -93,8 +84,7 @@ try {
         throw new Exception('Failed to update signal timestamp');
     }
     
-    // Commit transaction
-    mysqli_commit($dbc);
+	mysqli_commit($dbc);
     
     echo json_encode([
         'success' => true,
@@ -103,9 +93,12 @@ try {
     
 } catch (Exception $e) {
     mysqli_rollback($dbc);
+    
+	error_log('Failed to update comment (ID: ' . $comment_id . '): ' . $e->getMessage());
+    
     echo json_encode([
         'success' => false,
-        'message' => 'Failed to update comment: ' . $e->getMessage()
+        'message' => 'Failed to update comment. Please try again or contact support.'
     ]);
 }
 
