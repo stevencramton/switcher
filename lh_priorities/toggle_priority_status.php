@@ -3,7 +3,6 @@ session_start();
 include '../../mysqli_connect.php';
 include '../../templates/functions.php';
 
-// Security checks
 if (!isset($_SERVER['HTTP_X_REQUESTED_WITH']) || strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) !== 'xmlhttprequest') {
     http_response_code(403);
     die(json_encode(['success' => false, 'message' => 'Invalid request']));
@@ -32,9 +31,11 @@ if (mysqli_stmt_execute($stmt)) {
         'message' => 'Status updated successfully'
     ]);
 } else {
+	error_log('Failed to toggle priority status (ID: ' . $priority_id . '): ' . mysqli_error($dbc));
+    
     echo json_encode([
         'success' => false,
-        'message' => 'Failed to update status: ' . mysqli_error($dbc)
+        'message' => 'Failed to update status. Please try again or contact support.'
     ]);
 }
 
