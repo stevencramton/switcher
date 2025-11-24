@@ -49,9 +49,12 @@ $query = "UPDATE lh_docks SET
 $stmt = mysqli_prepare($dbc, $query);
 
 if (!$stmt) {
+    // Log detailed error server-side for debugging
+    error_log('Failed to prepare update dock statement (ID: ' . $dock_id . '): ' . mysqli_error($dbc));
+    
     echo json_encode([
         'success' => false,
-        'message' => 'Failed to prepare statement: ' . mysqli_error($dbc)
+        'message' => 'Failed to update dock. Please try again or contact support.'
     ]);
     exit();
 }
@@ -77,9 +80,12 @@ if (mysqli_stmt_execute($stmt)) {
         ]
     ]);
 } else {
+    // Log detailed error server-side for debugging
+    error_log('Failed to update dock (ID: ' . $dock_id . '): ' . mysqli_stmt_error($stmt));
+    
     echo json_encode([
         'success' => false,
-        'message' => 'Failed to update dock: ' . mysqli_stmt_error($stmt)
+        'message' => 'Failed to update dock. Please try again or contact support.'
     ]);
 }
 
