@@ -25,7 +25,6 @@ if (empty($_POST['signal_id']) || empty($_POST['message_text'])) {
 $signal_id = (int)$_POST['signal_id'];
 $message_text = trim($_POST['message_text']);
 $is_internal = ($is_admin && isset($_POST['is_internal']) && $_POST['is_internal'] == '1') ? 1 : 0;
-
 $verify_query = "SELECT sent_by FROM lh_signals WHERE signal_id = ? AND is_deleted = 0";
 $verify_stmt = mysqli_prepare($dbc, $verify_query);
 mysqli_stmt_bind_param($verify_stmt, 'i', $signal_id);
@@ -36,18 +35,13 @@ if (mysqli_num_rows($verify_result) == 0) {
     echo json_encode(['success' => false, 'message' => 'Signal not found']);
     exit();
 }
-
 $signal_data = mysqli_fetch_assoc($verify_result);
-
 if (!$is_admin && $signal_data['sent_by'] != $user_id) {
     echo json_encode(['success' => false, 'message' => 'Permission denied']);
     exit();
 }
-
 $current_datetime = date('Y-m-d H:i:s');
-
 mysqli_begin_transaction($dbc);
-
 try {
  	$query = "INSERT INTO lh_signal_messages (signal_id, user_id, message_text, is_internal, created_date) 
               VALUES (?, ?, ?, ?, ?)";
@@ -86,9 +80,10 @@ try {
     
 } catch (Exception $e) {
     mysqli_rollback($dbc);
+    error_log('Add comment error (Signal ID: ' . $signal_id . ', User ID: ' . $user_id . '): ' . $e->getMessage());
     echo json_encode([
         'success' => false,
-        'message' => 'Failed to add comment: ' . $e->getMessage()
+        'message' => 'Failed to add comment. Please try again.'
     ]);
 }
 ?>
