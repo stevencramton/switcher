@@ -308,16 +308,50 @@ try {
             }
             
             // Build query with parameterized closed states
+            // Each use of closed_states in the query needs its own set of placeholders and params
             $stats_params = $whereData['params'];
             $stats_types = $whereData['types'];
             
-            $closed_in = buildClosedStatesCondition($closed_states, $stats_params, $stats_types);
-            $closed_not_in = buildClosedStatesCondition($closed_states, $stats_params, $stats_types);
+            // First use: open_count (NOT IN)
+            $closed_not_in_1 = '';
+            if (!empty($closed_states)) {
+                $closed_not_in_1 = implode(',', array_fill(0, count($closed_states), '?'));
+                foreach ($closed_states as $state_id) {
+                    $stats_params[] = $state_id;
+                    $stats_types .= 'i';
+                }
+            } else {
+                $closed_not_in_1 = '0';
+            }
             
+            // Second use: closed_count (IN)
+            $closed_in = '';
+            if (!empty($closed_states)) {
+                $closed_in = implode(',', array_fill(0, count($closed_states), '?'));
+                foreach ($closed_states as $state_id) {
+                    $stats_params[] = $state_id;
+                    $stats_types .= 'i';
+                }
+            } else {
+                $closed_in = '0';
+            }
+            
+            // Third use: high_priority condition (NOT IN)
+            $closed_not_in_2 = '';
+            if (!empty($closed_states)) {
+                $closed_not_in_2 = implode(',', array_fill(0, count($closed_states), '?'));
+                foreach ($closed_states as $state_id) {
+                    $stats_params[] = $state_id;
+                    $stats_types .= 'i';
+                }
+            } else {
+                $closed_not_in_2 = '0';
+            }
+            
+            // High priority placeholders
             $hp_in = '';
             if (!empty($high_priority_ids)) {
-                $hp_placeholders = implode(',', array_fill(0, count($high_priority_ids), '?'));
-                $hp_in = $hp_placeholders;
+                $hp_in = implode(',', array_fill(0, count($high_priority_ids), '?'));
                 foreach ($high_priority_ids as $hp_id) {
                     $stats_params[] = $hp_id;
                     $stats_types .= 'i';
@@ -328,9 +362,9 @@ try {
             
             $stats_query = "SELECT 
                 COUNT(*) as total,
-                SUM(CASE WHEN s.sea_state_id NOT IN ($closed_not_in) THEN 1 ELSE 0 END) as open_count,
+                SUM(CASE WHEN s.sea_state_id NOT IN ($closed_not_in_1) THEN 1 ELSE 0 END) as open_count,
                 SUM(CASE WHEN s.sea_state_id IN ($closed_in) THEN 1 ELSE 0 END) as closed_count,
-                SUM(CASE WHEN s.sea_state_id NOT IN ($closed_not_in) AND s.priority_id IN ($hp_in) THEN 1 ELSE 0 END) as high_priority,
+                SUM(CASE WHEN s.sea_state_id NOT IN ($closed_not_in_2) AND s.priority_id IN ($hp_in) THEN 1 ELSE 0 END) as `high_priority`,
                 AVG(CASE WHEN s.resolved_date IS NOT NULL THEN TIMESTAMPDIFF(HOUR, s.sent_date, s.resolved_date) ELSE NULL END) as avg_resolution_hours
             FROM lh_signals s
             WHERE " . $whereData['where'];
@@ -523,8 +557,30 @@ try {
         case 'by_dock_detail':
             $dock_params = $whereData['params'];
             $dock_types = $whereData['types'];
-            $closed_not_in = buildClosedStatesCondition($closed_states, $dock_params, $dock_types);
-            $closed_in = buildClosedStatesCondition($closed_states, $dock_params, $dock_types);
+            
+            // First use: open_count (NOT IN)
+            $closed_not_in = '';
+            if (!empty($closed_states)) {
+                $closed_not_in = implode(',', array_fill(0, count($closed_states), '?'));
+                foreach ($closed_states as $state_id) {
+                    $dock_params[] = $state_id;
+                    $dock_types .= 'i';
+                }
+            } else {
+                $closed_not_in = '0';
+            }
+            
+            // Second use: closed_count (IN)
+            $closed_in = '';
+            if (!empty($closed_states)) {
+                $closed_in = implode(',', array_fill(0, count($closed_states), '?'));
+                foreach ($closed_states as $state_id) {
+                    $dock_params[] = $state_id;
+                    $dock_types .= 'i';
+                }
+            } else {
+                $closed_in = '0';
+            }
             
             $dock_query = "SELECT 
                 d.dock_name as label,
@@ -616,8 +672,30 @@ try {
         case 'by_service':
             $service_params = $whereData['params'];
             $service_types = $whereData['types'];
-            $closed_not_in = buildClosedStatesCondition($closed_states, $service_params, $service_types);
-            $closed_in = buildClosedStatesCondition($closed_states, $service_params, $service_types);
+            
+            // First use: open_count (NOT IN)
+            $closed_not_in = '';
+            if (!empty($closed_states)) {
+                $closed_not_in = implode(',', array_fill(0, count($closed_states), '?'));
+                foreach ($closed_states as $state_id) {
+                    $service_params[] = $state_id;
+                    $service_types .= 'i';
+                }
+            } else {
+                $closed_not_in = '0';
+            }
+            
+            // Second use: closed_count (IN)
+            $closed_in = '';
+            if (!empty($closed_states)) {
+                $closed_in = implode(',', array_fill(0, count($closed_states), '?'));
+                foreach ($closed_states as $state_id) {
+                    $service_params[] = $state_id;
+                    $service_types .= 'i';
+                }
+            } else {
+                $closed_in = '0';
+            }
             
             $service_query = "SELECT 
                 COALESCE(srv.service_name, 'Unassigned') as label,
@@ -747,7 +825,8 @@ try {
             
             $labels = []; $assigned = []; $closed = [];
             while ($row = mysqli_fetch_assoc($result)) {
-                $labels[] = htmlspecialchars($row['keeper_name'], ENT_QUOTES, 'UTF-8');
+                $keeper_name = $row['keeper_name'] ?? '';
+                $labels[] = $keeper_name ? htmlspecialchars($keeper_name, ENT_QUOTES, 'UTF-8') : '';
                 $assigned[] = (int)$row['assigned_count'];
                 $closed[] = (int)$row['closed_count'];
             }
@@ -788,7 +867,8 @@ try {
             
             $labels = []; $values = [];
             while ($row = mysqli_fetch_assoc($result)) {
-                $labels[] = htmlspecialchars($row['user_name'], ENT_QUOTES, 'UTF-8');
+                $user_name = $row['user_name'] ?? '';
+                $labels[] = $user_name ? htmlspecialchars($user_name, ENT_QUOTES, 'UTF-8') : '';
                 $values[] = (int)$row['signal_count'];
             }
             
@@ -927,12 +1007,12 @@ try {
                     $age = floor($interval->days / 30) . 'mo';
                 }
                 
-                // Sanitize output to prevent XSS
+                // Sanitize output to prevent XSS - handle NULL values
                 $row['sent_date_formatted'] = $sent_date->format('M j, Y');
                 $row['age'] = $age;
-                $row['title'] = htmlspecialchars($row['title'], ENT_QUOTES, 'UTF-8');
-                $row['sender_name'] = htmlspecialchars($row['sender_name'], ENT_QUOTES, 'UTF-8');
-                $row['keeper_name'] = htmlspecialchars($row['keeper_name'], ENT_QUOTES, 'UTF-8');
+                $row['title'] = $row['title'] ? htmlspecialchars($row['title'], ENT_QUOTES, 'UTF-8') : '';
+                $row['sender_name'] = $row['sender_name'] ? htmlspecialchars($row['sender_name'], ENT_QUOTES, 'UTF-8') : '';
+                $row['keeper_name'] = $row['keeper_name'] ? htmlspecialchars($row['keeper_name'], ENT_QUOTES, 'UTF-8') : '';
                 
                 $data[] = $row;
             }
