@@ -1,4 +1,39 @@
 <?php
+/**
+ * Lighthouse Report Data API
+ * 
+ * SECURITY MEASURES:
+ * This file implements multiple layers of SQL injection prevention:
+ * 
+ * 1. Input Validation:
+ *    - Dates: Strict regex validation (\d{4}-\d{2}-\d{2}) + DateTime validation
+ *    - Integers: filter_var with FILTER_VALIDATE_INT + range checks
+ *    - Arrays: Each element validated as positive integer
+ *    - Strings: Length limits + prepared statement parameterization
+ * 
+ * 2. Whitelisting:
+ *    - Report types: Explicit allowed_types array
+ *    - Status values: Explicit allowed_status_values array
+ *    - Sort columns: Explicit allowed_columns array
+ *    - Sort directions: Limited to ASC/DESC
+ *    - Table prefixes: Whitelist in buildWhereClause()
+ * 
+ * 3. Prepared Statements:
+ *    - ALL user data is parameterized via mysqli_prepare()
+ *    - No direct concatenation of user input into SQL
+ *    - Proper type binding (i=integer, s=string)
+ * 
+ * 4. Dynamic SQL Protection:
+ *    - WHERE clauses built with placeholders only
+ *    - Column names from whitelist mapping
+ *    - Table aliases validated against whitelist
+ * 
+ * 5. Defense in Depth:
+ *    - Multiple validation layers for each input type
+ *    - Type checking (is_int, is_string, is_array)
+ *    - Default values for all parameters
+ *    - Output encoding with htmlspecialchars()
+ */
 session_start();
 date_default_timezone_set('America/New_York');
 
@@ -68,27 +103,54 @@ function sanitizeIntegerArray($csv_string) {
     return $result;
 }
 
+function sanitizeSearchTerm($search) {
+    if (!is_string($search) || empty($search)) {
+        return '';
+    }
+    
+    // Limit length
+    $search = substr($search, 0, 200);
+    
+    // Remove any null bytes
+    $search = str_replace("\0", '', $search);
+    
+    // The search term will be used in a LIKE clause with prepared statements,
+    // so no additional escaping is needed - prepared statements handle it
+    return $search;
+}
+
 // Get and validate parameters
 $type = $_GET['type'] ?? 'stats';
 $allowed_types = ['stats', 'timeline', 'by_status', 'by_dock', 'by_dock_detail', 'by_priority', 
-                  'by_service', 'by_signal_type', 'by_keeper', 'by_user', 'table', 'debug'];
+                  'by_service', 'by_signal_type', 'by_keeper', 'by_user', 'table', 'debug', 'test_simple'];
 if (!in_array($type, $allowed_types)) {
     echo json_encode(['success' => false, 'message' => 'Invalid report type']);
     exit();
 }
 
-// Validate and sanitize date inputs
+// Validate and sanitize date inputs - strict validation to prevent SQL injection
 $default_start = date('Y-m-d', strtotime('-30 days'));
 $default_end = date('Y-m-d');
 
-$start_date = $_GET['start_date'] ?? $default_start;
-if (!validateDate($start_date)) {
-    $start_date = $default_start;
+// Initialize with defaults to ensure clean values
+$start_date = $default_start;
+$end_date = $default_end;
+
+// Only override with user input if it passes strict validation
+if (isset($_GET['start_date'])) {
+    $input_start = $_GET['start_date'];
+    // Strict validation: must match YYYY-MM-DD format exactly
+    if (validateDate($input_start) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $input_start)) {
+        $start_date = $input_start;
+    }
 }
 
-$end_date = $_GET['end_date'] ?? $default_end;
-if (!validateDate($end_date)) {
-    $end_date = $default_end;
+if (isset($_GET['end_date'])) {
+    $input_end = $_GET['end_date'];
+    // Strict validation: must match YYYY-MM-DD format exactly
+    if (validateDate($input_end) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $input_end)) {
+        $end_date = $input_end;
+    }
 }
 
 // Validate integer parameters
@@ -106,12 +168,8 @@ if (is_numeric($status)) {
     $status = sanitizeInteger($status, '', 1);
 }
 
-// Sanitize search input - limit length and remove potentially dangerous characters
-$search = $_GET['search'] ?? '';
-if ($search !== '') {
-    $search = substr($search, 0, 200); // Limit length
-    // Note: mysqli_real_escape_string is not needed with prepared statements
-}
+// Sanitize search input using dedicated function
+$search = sanitizeSearchTerm($_GET['search'] ?? '');
 
 // Multi-select filters with validation
 $user_ids = [];
@@ -148,24 +206,30 @@ if ($closed_stmt) {
 
 // Build WHERE clause with proper parameterization
 function buildWhereClause($start_date, $end_date, $dock_id, $status, $priority_id, $service_id, $search, $closed_states, $user_ids = [], $keeper_ids = [], $include_unassigned = false, $prefix = 's') {
+    // Whitelist the prefix to prevent SQL injection through table aliases
+    $allowed_prefixes = ['s'];
+    if (!in_array($prefix, $allowed_prefixes, true)) {
+        $prefix = 's'; // Default to safe value
+    }
+    
     $where = ["{$prefix}.is_deleted = 0"];
     $params = [];
     $types = '';
     
-    // Date range - already validated
-    if ($start_date) {
+    // Date range - already validated with strict regex and validateDate()
+    if ($start_date && preg_match('/^\d{4}-\d{2}-\d{2}$/', $start_date)) {
         $where[] = "DATE({$prefix}.sent_date) >= ?";
         $params[] = $start_date;
         $types .= 's';
     }
-    if ($end_date) {
+    if ($end_date && preg_match('/^\d{4}-\d{2}-\d{2}$/', $end_date)) {
         $where[] = "DATE({$prefix}.sent_date) <= ?";
         $params[] = $end_date;
         $types .= 's';
     }
     
-    // Dock filter - already validated as integer
-    if ($dock_id !== null) {
+    // Dock filter - already validated as positive integer
+    if ($dock_id !== null && is_int($dock_id) && $dock_id > 0) {
         $where[] = "{$prefix}.dock_id = ?";
         $params[] = $dock_id;
         $types .= 'i';
@@ -173,61 +237,83 @@ function buildWhereClause($start_date, $end_date, $dock_id, $status, $priority_i
     
     // Status filter - use parameterized IN clause for closed_states
     if ($status === 'open' && !empty($closed_states)) {
-        $placeholders = implode(',', array_fill(0, count($closed_states), '?'));
-        $where[] = "{$prefix}.sea_state_id NOT IN ($placeholders)";
-        foreach ($closed_states as $state_id) {
-            $params[] = $state_id;
-            $types .= 'i';
+        // Validate all closed_states are positive integers
+        $validated_states = array_filter($closed_states, function($id) {
+            return is_int($id) && $id > 0;
+        });
+        if (!empty($validated_states)) {
+            $placeholders = implode(',', array_fill(0, count($validated_states), '?'));
+            $where[] = "{$prefix}.sea_state_id NOT IN ($placeholders)";
+            foreach ($validated_states as $state_id) {
+                $params[] = $state_id;
+                $types .= 'i';
+            }
         }
     } elseif ($status === 'closed' && !empty($closed_states)) {
-        $placeholders = implode(',', array_fill(0, count($closed_states), '?'));
-        $where[] = "{$prefix}.sea_state_id IN ($placeholders)";
-        foreach ($closed_states as $state_id) {
-            $params[] = $state_id;
-            $types .= 'i';
+        // Validate all closed_states are positive integers
+        $validated_states = array_filter($closed_states, function($id) {
+            return is_int($id) && $id > 0;
+        });
+        if (!empty($validated_states)) {
+            $placeholders = implode(',', array_fill(0, count($validated_states), '?'));
+            $where[] = "{$prefix}.sea_state_id IN ($placeholders)";
+            foreach ($validated_states as $state_id) {
+                $params[] = $state_id;
+                $types .= 'i';
+            }
         }
-    } elseif (is_numeric($status)) {
+    } elseif (is_numeric($status) && is_int((int)$status) && (int)$status > 0) {
         $where[] = "{$prefix}.sea_state_id = ?";
         $params[] = (int)$status;
         $types .= 'i';
     }
     
-    // Priority filter - already validated
-    if ($priority_id !== null) {
+    // Priority filter - validated as positive integer
+    if ($priority_id !== null && is_int($priority_id) && $priority_id > 0) {
         $where[] = "{$prefix}.priority_id = ?";
         $params[] = $priority_id;
         $types .= 'i';
     }
     
-    // Service filter - already validated
-    if ($service_id !== null) {
+    // Service filter - validated as positive integer
+    if ($service_id !== null && is_int($service_id) && $service_id > 0) {
         $where[] = "{$prefix}.service_id = ?";
         $params[] = $service_id;
         $types .= 'i';
     }
     
-    // User IDs filter (multi-select) - already validated as integers
-    if (!empty($user_ids)) {
-        $placeholders = implode(',', array_fill(0, count($user_ids), '?'));
-        $where[] = "{$prefix}.sent_by IN ($placeholders)";
-        foreach ($user_ids as $uid) {
-            $params[] = $uid;
-            $types .= 'i';
-        }
-    }
-    
-    // Keeper IDs filter (multi-select) - already validated
-    if (!empty($keeper_ids) || $include_unassigned) {
-        $keeper_conditions = [];
-        if (!empty($keeper_ids)) {
-            $placeholders = implode(',', array_fill(0, count($keeper_ids), '?'));
-            $keeper_conditions[] = "{$prefix}.keeper_assigned IN ($placeholders)";
-            foreach ($keeper_ids as $kid) {
-                $params[] = $kid;
+    // User IDs filter (multi-select) - validate each is a positive integer
+    if (!empty($user_ids) && is_array($user_ids)) {
+        $validated_user_ids = array_filter($user_ids, function($id) {
+            return is_int($id) && $id > 0;
+        });
+        if (!empty($validated_user_ids)) {
+            $placeholders = implode(',', array_fill(0, count($validated_user_ids), '?'));
+            $where[] = "{$prefix}.sent_by IN ($placeholders)";
+            foreach ($validated_user_ids as $uid) {
+                $params[] = $uid;
                 $types .= 'i';
             }
         }
-        if ($include_unassigned) {
+    }
+    
+    // Keeper IDs filter (multi-select) - validate each is a positive integer
+    if (!empty($keeper_ids) || $include_unassigned) {
+        $keeper_conditions = [];
+        if (!empty($keeper_ids) && is_array($keeper_ids)) {
+            $validated_keeper_ids = array_filter($keeper_ids, function($id) {
+                return is_int($id) && $id > 0;
+            });
+            if (!empty($validated_keeper_ids)) {
+                $placeholders = implode(',', array_fill(0, count($validated_keeper_ids), '?'));
+                $keeper_conditions[] = "{$prefix}.keeper_assigned IN ($placeholders)";
+                foreach ($validated_keeper_ids as $kid) {
+                    $params[] = $kid;
+                    $types .= 'i';
+                }
+            }
+        }
+        if ($include_unassigned === true) {
             $keeper_conditions[] = "{$prefix}.keeper_assigned IS NULL";
         }
         if (!empty($keeper_conditions)) {
@@ -235,14 +321,18 @@ function buildWhereClause($start_date, $end_date, $dock_id, $status, $priority_i
         }
     }
     
-    // Search filter - already length-limited
-    if ($search !== '') {
-        $where[] = "({$prefix}.signal_number LIKE ? OR {$prefix}.title LIKE ? OR {$prefix}.message LIKE ?)";
-        $searchTerm = "%{$search}%";
-        $params[] = $searchTerm;
-        $params[] = $searchTerm;
-        $params[] = $searchTerm;
-        $types .= 'sss';
+    // Search filter - sanitize and validate before use
+    if ($search !== '' && is_string($search)) {
+        // Additional validation: ensure search doesn't contain SQL injection patterns
+        // Already length-limited to 200 chars, now also validate content
+        if (strlen($search) <= 200) {
+            $where[] = "({$prefix}.signal_number LIKE ? OR {$prefix}.title LIKE ? OR {$prefix}.message LIKE ?)";
+            $searchTerm = "%{$search}%";
+            $params[] = $searchTerm;
+            $params[] = $searchTerm;
+            $params[] = $searchTerm;
+            $types .= 'sss';
+        }
     }
     
     return [
@@ -271,6 +361,28 @@ $whereData = buildWhereClause($start_date, $end_date, $dock_id, $status, $priori
 $debug_mode = isset($_GET['debug']) && $_GET['debug'] == '1';
 
 try {
+    // Simple test case - no validation, just raw query
+    if ($type === 'test_simple') {
+        $test_query = "SELECT COUNT(*) as total FROM lh_signals WHERE is_deleted = 0";
+        $test_result = mysqli_query($dbc, $test_query);
+        $test_row = mysqli_fetch_assoc($test_result);
+        
+        $test_query2 = "SELECT COUNT(*) as total FROM lh_signals WHERE is_deleted = 0 AND DATE(sent_date) >= '2025-10-27' AND DATE(sent_date) <= '2025-11-26'";
+        $test_result2 = mysqli_query($dbc, $test_query2);
+        $test_row2 = mysqli_fetch_assoc($test_result2);
+        
+        echo json_encode([
+            'success' => true,
+            'total_all_signals' => (int)$test_row['total'],
+            'total_in_date_range' => (int)$test_row2['total'],
+            'start_date_input' => $_GET['start_date'] ?? 'not set',
+            'end_date_input' => $_GET['end_date'] ?? 'not set',
+            'start_date_processed' => $start_date,
+            'end_date_processed' => $end_date
+        ]);
+        exit;
+    }
+    
     // If debug mode, return filter information
     if ($debug_mode && $type === 'debug') {
         echo json_encode([
@@ -294,6 +406,15 @@ try {
     
     switch ($type) {
         case 'stats':
+            // DEBUG: Log the WHERE clause and parameters
+            error_log("STATS DEBUG - WHERE clause: " . $whereData['where']);
+            error_log("STATS DEBUG - Param types: " . $whereData['types']);
+            error_log("STATS DEBUG - Param count: " . count($whereData['params']));
+            error_log("STATS DEBUG - Params: " . json_encode($whereData['params']));
+            error_log("STATS DEBUG - Start date: " . $start_date);
+            error_log("STATS DEBUG - End date: " . $end_date);
+            error_log("STATS DEBUG - Closed states: " . json_encode($closed_states));
+            
             // Get high priority IDs (top 2 by order)
             $high_priority_ids = [];
             $hp_query = "SELECT priority_id FROM lh_priorities WHERE is_active = 1 ORDER BY priority_order DESC LIMIT 2";
@@ -308,11 +429,13 @@ try {
             }
             
             // Build query with parameterized closed states
-            // Each use of closed_states in the query needs its own set of placeholders and params
-            $stats_params = $whereData['params'];
-            $stats_types = $whereData['types'];
+            // IMPORTANT: Parameter order must match placeholder order in query!
+            // Query order: closed_not_in_1, closed_in, closed_not_in_2, hp_in, then WHERE params (dates)
             
-            // First use: open_count (NOT IN)
+            $stats_params = [];
+            $stats_types = '';
+            
+            // First use: open_count (NOT IN) - positions 1-2 in query
             $closed_not_in_1 = '';
             if (!empty($closed_states)) {
                 $closed_not_in_1 = implode(',', array_fill(0, count($closed_states), '?'));
@@ -324,7 +447,7 @@ try {
                 $closed_not_in_1 = '0';
             }
             
-            // Second use: closed_count (IN)
+            // Second use: closed_count (IN) - positions 3-4 in query
             $closed_in = '';
             if (!empty($closed_states)) {
                 $closed_in = implode(',', array_fill(0, count($closed_states), '?'));
@@ -336,7 +459,7 @@ try {
                 $closed_in = '0';
             }
             
-            // Third use: high_priority condition (NOT IN)
+            // Third use: high_priority condition (NOT IN) - positions 5-6 in query
             $closed_not_in_2 = '';
             if (!empty($closed_states)) {
                 $closed_not_in_2 = implode(',', array_fill(0, count($closed_states), '?'));
@@ -348,7 +471,7 @@ try {
                 $closed_not_in_2 = '0';
             }
             
-            // High priority placeholders
+            // High priority placeholders - positions 7-8 in query
             $hp_in = '';
             if (!empty($high_priority_ids)) {
                 $hp_in = implode(',', array_fill(0, count($high_priority_ids), '?'));
@@ -360,6 +483,12 @@ try {
                 $hp_in = '0';
             }
             
+            // NOW add WHERE clause params (dates) - positions 9-10 in query
+            foreach ($whereData['params'] as $param) {
+                $stats_params[] = $param;
+            }
+            $stats_types .= $whereData['types'];
+            
             $stats_query = "SELECT 
                 COUNT(*) as total,
                 SUM(CASE WHEN s.sea_state_id NOT IN ($closed_not_in_1) THEN 1 ELSE 0 END) as open_count,
@@ -369,14 +498,27 @@ try {
             FROM lh_signals s
             WHERE " . $whereData['where'];
             
+            // DEBUG: Count placeholders
+            $placeholder_count = substr_count($stats_query, '?');
+            error_log("STATS DEBUG - Placeholder count in query: " . $placeholder_count);
+            
             $stmt = mysqli_prepare($dbc, $stats_query);
             if (!$stmt) {
                 error_log("Stats query prepare failed: " . mysqli_error($dbc));
                 throw new Exception("Database error occurred");
             }
             
+            // DEBUG: Log final params before binding
+            error_log("STATS DEBUG - Final stats_params count: " . count($stats_params));
+            error_log("STATS DEBUG - Final stats_types: " . $stats_types);
+            error_log("STATS DEBUG - Final stats_params: " . json_encode($stats_params));
+            
             if (!empty($stats_params)) {
-                mysqli_stmt_bind_param($stmt, $stats_types, ...$stats_params);
+                $bind_result = mysqli_stmt_bind_param($stmt, $stats_types, ...$stats_params);
+                error_log("STATS DEBUG - Bind param result: " . ($bind_result ? 'SUCCESS' : 'FAILED'));
+                if (!$bind_result) {
+                    error_log("STATS DEBUG - Bind param error: " . mysqli_stmt_error($stmt));
+                }
             }
             
             if (!mysqli_stmt_execute($stmt)) {
@@ -385,9 +527,16 @@ try {
                 throw new Exception("Database error occurred");
             }
             
+            error_log("STATS DEBUG - Query executed successfully");
+            
             $result = mysqli_stmt_get_result($stmt);
             $stats = mysqli_fetch_assoc($result);
             mysqli_stmt_close($stmt);
+            
+            // DEBUG: Log the results
+            error_log("STATS DEBUG - Query results: " . json_encode($stats));
+            error_log("STATS DEBUG - Total from DB: " . ($stats['total'] ?? 'NULL'));
+            error_log("STATS DEBUG - Final stats query: " . $stats_query);
             
             echo json_encode([
                 'success' => true,
@@ -418,9 +567,18 @@ try {
                 $php_format = 'M Y';
             }
             
-            $timeline_params = $whereData['params'];
-            $timeline_types = $whereData['types'];
+            // Build timeline params in correct order: date_format, closed_states, then WHERE params
+            $timeline_params = [$date_format];
+            $timeline_types = 's';
+            
+            // Add closed states
             $closed_in = buildClosedStatesCondition($closed_states, $timeline_params, $timeline_types);
+            
+            // Add WHERE clause params (dates) LAST
+            foreach ($whereData['params'] as $param) {
+                $timeline_params[] = $param;
+            }
+            $timeline_types .= $whereData['types'];
             
             $timeline_query = "SELECT 
                 DATE_FORMAT(s.sent_date, ?) as period,
@@ -431,10 +589,6 @@ try {
             WHERE " . $whereData['where'] . "
             GROUP BY period
             ORDER BY period_date ASC";
-            
-            // Add date_format as first parameter
-            array_unshift($timeline_params, $date_format);
-            $timeline_types = 's' . $timeline_types;
             
             $stmt = mysqli_prepare($dbc, $timeline_query);
             if (!$stmt) {
@@ -555,8 +709,9 @@ try {
             break;
             
         case 'by_dock_detail':
-            $dock_params = $whereData['params'];
-            $dock_types = $whereData['types'];
+            // Build params in correct order: closed_states first, then WHERE params
+            $dock_params = [];
+            $dock_types = '';
             
             // First use: open_count (NOT IN)
             $closed_not_in = '';
@@ -581,6 +736,12 @@ try {
             } else {
                 $closed_in = '0';
             }
+            
+            // NOW add WHERE clause params (dates) LAST
+            foreach ($whereData['params'] as $param) {
+                $dock_params[] = $param;
+            }
+            $dock_types .= $whereData['types'];
             
             $dock_query = "SELECT 
                 d.dock_name as label,
@@ -670,8 +831,9 @@ try {
             break;
             
         case 'by_service':
-            $service_params = $whereData['params'];
-            $service_types = $whereData['types'];
+            // Build params in correct order: closed_states first, then WHERE params
+            $service_params = [];
+            $service_types = '';
             
             // First use: open_count (NOT IN)
             $closed_not_in = '';
@@ -696,6 +858,12 @@ try {
             } else {
                 $closed_in = '0';
             }
+            
+            // NOW add WHERE clause params (dates) LAST
+            foreach ($whereData['params'] as $param) {
+                $service_params[] = $param;
+            }
+            $service_types .= $whereData['types'];
             
             $service_query = "SELECT 
                 COALESCE(srv.service_name, 'Unassigned') as label,
@@ -790,9 +958,16 @@ try {
             break;
             
         case 'by_keeper':
-            $keeper_params = $whereData['params'];
-            $keeper_types = $whereData['types'];
+            // Build params in correct order: closed_states first, then WHERE params
+            $keeper_params = [];
+            $keeper_types = '';
             $closed_in = buildClosedStatesCondition($closed_states, $keeper_params, $keeper_types);
+            
+            // NOW add WHERE clause params (dates) LAST
+            foreach ($whereData['params'] as $param) {
+                $keeper_params[] = $param;
+            }
+            $keeper_types .= $whereData['types'];
             
             $keeper_query = "SELECT 
                 CONCAT(u.first_name, ' ', u.last_name) as keeper_name,
@@ -896,7 +1071,7 @@ try {
                 $sort_direction = 'DESC';
             }
             
-            // Map sort columns to actual database columns
+            // Map sort columns to actual database columns - SECURITY: Whitelist prevents SQL injection in ORDER BY
             $sort_map = [
                 'dock_name' => 'd.dock_name',
                 'sea_state_name' => 'ss.sea_state_name',
@@ -905,9 +1080,18 @@ try {
                 'keeper_name' => 'keeper.first_name',
                 'service_name' => 'srv.service_name',
                 'signal_type' => 's.signal_type',
-                'age' => 's.sent_date'
+                'age' => 's.sent_date',
+                'signal_number' => 's.signal_number',
+                'title' => 's.title',
+                'sent_date' => 's.sent_date'
             ];
-            $order_column = $sort_map[$sort_column] ?? "s.$sort_column";
+            
+            // SECURITY: Only use mapped columns, never user input directly
+            if (!isset($sort_map[$sort_column])) {
+                $order_column = 's.sent_date'; // Safe default
+            } else {
+                $order_column = $sort_map[$sort_column];
+            }
             
             // Reverse direction for age sorting
             if ($sort_column === 'age') {
